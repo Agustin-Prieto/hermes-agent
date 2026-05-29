@@ -911,52 +911,73 @@ async def _proxy_to_dashboard(request: Request) -> Response:
 
 
 async def _proxy_ws(request: Request) -> Response:
-    """WebSocket proxy → Hermes dashboard."""
+    """WebSocket proxy → Hermes dashboard.
+
+    Connects to the upstream FIRST, and only accepts the client if the upstream
+    is available. This prevents accepting a WebSocket only to immediately fail
+    because the Hermes dashboard isn't ready yet.
+    """
     target = f"ws://{HERMES_DASHBOARD_HOST}:{HERMES_DASHBOARD_PORT}{request.url.path}"
     if request.url.query:
         target = f"{target}?{request.url.query}"
 
+    # Try upstream connection first — fail fast if dashboard isn't ready.
+    try:
+        upstream_ws = await asyncio.wait_for(
+            websockets.connect(target, close_timeout=10),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        print(f"[proxy-ws] upstream timeout for {request.url.path}", flush=True)
+        ws = WebSocket(request)
+        await ws.accept()
+        await ws.send_json({"error": "Dashboard not ready yet", "type": "error"})
+        await ws.close()
+        return
+    except Exception as e:
+        print(f"[proxy-ws] upstream unavailable for {request.url.path}: {e}", flush=True)
+        ws = WebSocket(request)
+        await ws.accept()
+        await ws.send_json({"error": "Dashboard unavailable", "type": "error"})
+        await ws.close()
+        return
+
+    # Upstream is connected, now accept the client.
     ws = WebSocket(request)
     await ws.accept()
 
-    try:
-        async with websockets.connect(target, close_timeout=10) as upstream:
-            async def relay_upstream():
-                try:
-                    async for msg in upstream:
-                        if ws.client_state == WebSocketState.DISCONNECTED:
-                            break
-                        if isinstance(msg, bytes):
-                            await ws.send_bytes(msg)
-                        else:
-                            await ws.send_text(msg)
-                except Exception:
-                    pass
-
-            relay_task = asyncio.create_task(relay_upstream())
-
-            try:
-                async for msg in ws.iter_json():
-                    if ws.client_state == WebSocketState.DISCONNECTED:
-                        break
-                    await upstream.send(json.dumps(msg))
-            except WebSocketDisconnect:
-                pass
-            finally:
-                relay_task.cancel()
-                try:
-                    await relay_task
-                except asyncio.CancelledError:
-                    pass
-    except Exception as e:
-        print(f"[proxy-ws] error for {request.url.path}: {e}", flush=True)
-        if ws.client_state != WebSocketState.DISCONNECTED:
-            await ws.send_json({"error": str(e), "type": "error"})
-    finally:
+    async def relay_upstream():
         try:
-            await ws.close()
+            async for msg in upstream_ws:
+                if ws.client_state == WebSocketState.DISCONNECTED:
+                    break
+                if isinstance(msg, bytes):
+                    await ws.send_bytes(msg)
+                else:
+                    await ws.send_text(msg)
         except Exception:
             pass
+
+    relay_task = asyncio.create_task(relay_upstream())
+
+    try:
+        async for msg in ws.iter_json():
+            if ws.client_state == WebSocketState.DISCONNECTED:
+                break
+            await upstream_ws.send(json.dumps(msg))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        relay_task.cancel()
+        try:
+            await relay_task
+        except asyncio.CancelledError:
+            pass
+        await upstream_ws.close()
+    try:
+        await ws.close()
+    except Exception:
+        pass
 
 
 # ── Route handlers ────────────────────────────────────────────────────────────
