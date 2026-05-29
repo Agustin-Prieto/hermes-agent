@@ -140,6 +140,9 @@ code{font-family:var(--font-mono);color:var(--accent)}
       <span class="nav-icon">◈</span><span>Users</span>
       <span class="nav-badge" :class="{visible: pendingCount>0}" x-text="pendingCount"></span>
     </div>
+    <div class="nav-item" :class="{active: page==='mcp', locked: !isSetupDone}" @click="isSetupDone&&(page='mcp')">
+      <span class="nav-icon">🔌</span><span>MCPs</span>
+    </div>
     <div class="nav-divider" style="margin-top:auto"></div>
     <div class="nav-item danger" @click="resetConfig()"><span class="nav-icon">⊘</span><span>Reset Config</span></div>
     <div class="nav-item" @click="window.location.href='/logout'"><span class="nav-icon">↪</span><span>Sign out</span></div>
@@ -394,6 +397,79 @@ code{font-family:var(--font-mono);color:var(--accent)}
   </div>
 </div>
 
+<!-- MCP Panel -->
+<div class="panel" :class="{active: page==='mcp'}">
+  <div class="panel-header">
+    <div class="panel-title">MCP Servers</div>
+    <div class="panel-subtitle">External tools via Model Context Protocol</div>
+  </div>
+  <div class="panel-body">
+
+    <!-- Add MCP Form -->
+    <div class="card">
+      <div class="section-label">Add MCP Server</div>
+      <div class="field-grid-2">
+        <div><label class="field-label">Name</label><input type="text" x-model="mcpForm.name" placeholder="e.g. zapier, filesystem"></div>
+        <div><label class="field-label">Type</label>
+          <select x-model="mcpForm.type">
+            <option value="stdio">Stdio (local process)</option>
+            <option value="http">HTTP (remote URL)</option>
+          </select>
+        </div>
+      </div>
+      <template x-if="mcpForm.type==='stdio'">
+        <div>
+          <div class="field-gap"><label class="field-label">Command</label><input type="text" x-model="mcpForm.command" placeholder="e.g. npx, python, node"></div>
+          <div class="field-gap"><label class="field-label">Args</label><input type="text" x-model="mcpForm.args" placeholder='e.g. -y,@modelcontextprotocol/server-filesystem,/tmp'></div>
+        </div>
+      </template>
+      <template x-if="mcpForm.type==='http'">
+        <div>
+          <div class="field-gap"><label class="field-label">URL</label><input type="text" x-model="mcpForm.url" placeholder="https://mcp.zapier.com/api/v1/connect"></div>
+          <div><label class="field-label">Auth</label>
+            <select x-model="mcpForm.auth">
+              <option value="">None</option>
+              <option value="oauth">OAuth</option>
+              <option value="bearer">Bearer Token</option>
+            </select>
+          </div>
+          <div class="field-gap" x-show="mcpForm.auth==='bearer'"><label class="field-label">Token / Header</label><input type="password" x-model="mcpForm.headerValue" placeholder="Bearer ***"></div>
+        </div>
+      </template>
+      <div class="field-gap"><label class="field-label">Env vars (KEY=value, one per line)</label><textarea x-model="mcpForm.env" rows="2" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:7px 10px;font-family:var(--font-mono);font-size:12px;outline:none;resize:vertical" placeholder="GITHUB_TOKEN=ghp_..."></textarea></div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn primary" @click="addMcpServer()" :disabled="mcpSaving">Add Server</button>
+      </div>
+    </div>
+
+    <!-- Configured MCP Servers -->
+    <div class="section-label">Configured Servers</div>
+    <div x-show="Object.keys(mcpServers).length===0" class="empty-state">No MCP servers configured yet.</div>
+    <template x-for="(srv, name) in mcpServers" :key="name">
+      <div class="card" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-weight:600;font-size:14px" x-text="name"></span>
+            <span class="chip" :class="srv.url?'dim':'green'" x-text="srv.url?'HTTP':'Stdio'"></span>
+            <span x-show="srv.auth==='oauth'" class="chip" style="background:rgba(98,114,255,.15);color:var(--accent2)">OAuth</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-dim);font-family:var(--font-mono)">
+            <div x-show="srv.command" x-text="srv.command + ' ' + (srv.args||[]).join(' ')"></div>
+            <div x-show="srv.url" x-text="srv.url"></div>
+            <div x-show="srv.env" x-text="'env: ' + Object.keys(srv.env).join(', ')" style="margin-top:4px"></div>
+            <div x-show="srv.tools?.include" x-text="'tools: ' + srv.tools.include.join(', ')" style="margin-top:4px"></div>
+          </div>
+        </div>
+        <button class="btn sm danger" @click="removeMcpServer(name)" style="flex-shrink:0">Remove</button>
+      </div>
+    </template>
+
+    <div x-show="Object.keys(mcpServers).length>0" style="margin-top:16px">
+      <button class="btn" @click="reloadMcp()">↺ Reload MCPs <span style="color:var(--text-dim);font-size:11px">(/reload-mcp in chat)</span></button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div id="toast" x-show="toast.show" x-text="toast.msg" :class="toast.type" @click="toast.show=false"></div>
 
@@ -417,6 +493,10 @@ function app() {
     toast: {show:false,msg:'',type:'ok'},
 
     xai: {status:'none',userCode:'',verificationUri:'',loading:false,error:''},
+
+    mcpServers: {},
+    mcpForm: {name:'',type:'stdio',command:'',args:'',url:'',auth:'',headerValue:'',env:''},
+    mcpSaving: false,
 
     providerMap: {
       'OpenRouter': {key:'OPENROUTER_API_KEY',keyLabel:'OpenRouter API Key'},
@@ -492,6 +572,7 @@ function app() {
 
     async init() {
       await this.loadConfig();
+      await this.loadMcpServers();
       this.pollStatus();
       this.pollLogs();
       setInterval(()=>this.pollStatus(), 5000);
@@ -635,6 +716,81 @@ function app() {
     showToast(msg, type='ok') {
       this.toast = {show:true,msg,type};
       setTimeout(()=>this.toast.show=false, 4000);
+    },
+
+    async loadMcpServers() {
+      try {
+        const r = await fetch('/api/mcp');
+        const d = await r.json();
+        this.mcpServers = d.servers || {};
+      } catch(e) { this.showToast('Failed to load MCPs', 'err'); }
+    },
+
+    async addMcpServer() {
+      const f = this.mcpForm;
+      if (!f.name) { this.showToast('Server name required', 'err'); return; }
+
+      const srv = {};
+      if (f.type === 'stdio') {
+        if (!f.command) { this.showToast('Command required', 'err'); return; }
+        srv.command = f.command;
+        srv.args = f.args ? f.args.split(',').map(a=>a.trim()) : [];
+      } else {
+        if (!f.url) { this.showToast('URL required', 'err'); return; }
+        srv.url = f.url;
+        srv.auth = f.auth || undefined;
+        if (f.auth === 'bearer' && f.headerValue) {
+          srv.headers = {Authorization: `Bearer ${f.headerValue}`};
+        }
+      }
+
+      if (f.env) {
+        const env = {};
+        f.env.split('\n').filter(Boolean).forEach(line => {
+          const [k, ...v] = line.split('=');
+          if (k) env[k.trim()] = v.join('=').trim();
+        });
+        if (Object.keys(env).length) srv.env = env;
+      }
+
+      this.mcpSaving = true;
+      try {
+        const r = await fetch('/api/mcp', {
+          method:'PUT',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({servers: {[f.name]: srv}})
+        });
+        const d = await r.json();
+        if (d.ok) {
+          this.mcpServers = d.servers;
+          this.mcpForm = {name:'',type:'stdio',command:'',args:'',url:'',auth:'',headerValue:'',env:''};
+          this.showToast('MCP server added', 'ok');
+        } else {
+          this.showToast('Error: '+(d.error||'unknown'), 'err');
+        }
+      } catch(e) { this.showToast('Failed to add MCP', 'err'); }
+      finally { this.mcpSaving = false; }
+    },
+
+    async removeMcpServer(name) {
+      if (!confirm(`Remove MCP server '${name}'?`)) return;
+      try {
+        const r = await fetch('/api/mcp', {
+          method:'DELETE',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({name})
+        });
+        const d = await r.json();
+        if (d.ok) {
+          delete this.mcpServers[name];
+          this.showToast('Removed '+name, 'ok');
+        }
+      } catch(e) { this.showToast('Failed to remove MCP', 'err'); }
+    },
+
+    async reloadMcp() {
+      await fetch('/api/gw/restart', {method:'POST'});
+      this.showToast('Gateway restarting...', 'ok');
     }
   }
 }

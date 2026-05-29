@@ -1193,6 +1193,110 @@ async def api_pairing_revoke(request: Request):
     return JSONResponse({"ok": True})
 
 
+# ── MCP Server management ────────────────────────────────────────────────────
+def read_config_yaml() -> dict:
+    """Read full config.yaml, return empty dict if missing or invalid."""
+    config_path = Path(HERMES_HOME) / "config.yaml"
+    if not config_path.exists():
+        return {}
+    try:
+        with config_path.open() as f:
+            loaded = yaml.safe_load(f)
+        return loaded if isinstance(loaded, dict) else {}
+    except (yaml.YAMLError, OSError):
+        return {}
+
+
+async def api_mcp_get(request: Request):
+    """GET /api/mcp — return list of configured MCP servers."""
+    if err := guard(request):
+        return err
+    config = read_config_yaml()
+    servers = config.get("mcp_servers", {})
+    return JSONResponse({"servers": servers})
+
+
+async def api_mcp_put(request: Request):
+    """PUT /api/mcp — update MCP servers config (deep-merge)."""
+    if err := guard(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    try:
+        async with cfg_lock:
+            config = read_config_yaml()
+            existing_mcp = config.get("mcp_servers", {})
+            new_servers = body.get("servers", {})
+
+            # Validate server entries
+            for name, srv in new_servers.items():
+                if not isinstance(srv, dict):
+                    return JSONResponse(
+                        {"error": f"MCP server '{name}' must be an object"},
+                        status_code=400,
+                    )
+
+            # Deep-merge: update existing servers with new ones
+            merged_mcp = dict(existing_mcp)
+            for name, srv in new_servers.items():
+                if srv is None:
+                    merged_mcp.pop(name, None)  # Remove server
+                else:
+                    existing = merged_mcp.get(name, {})
+                    merged = dict(existing)
+                    merged.update(srv)
+                    merged_mcp[name] = merged
+
+            config["mcp_servers"] = merged_mcp
+
+            # Write full config.yaml preserving all other keys
+            config_path = Path(HERMES_HOME) / "config.yaml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with config_path.open("w") as f:
+                yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+
+        return JSONResponse({"ok": True, "servers": merged_mcp})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def api_mcp_delete(request: Request):
+    """DELETE /api/mcp — remove a specific MCP server."""
+    if err := guard(request):
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"error": "MCP server name required"}, status_code=400)
+
+    async with cfg_lock:
+        config = read_config_yaml()
+        servers = config.get("mcp_servers", {})
+        if name in servers:
+            del servers[name]
+        config["mcp_servers"] = servers
+        config_path = Path(HERMES_HOME) / "config.yaml"
+        with config_path.open("w") as f:
+            yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+
+    return JSONResponse({"ok": True})
+
+
+async def api_mcp_restart(request: Request):
+    """POST /api/mcp/restart — restart gateway to pick up MCP changes."""
+    if err := guard(request):
+        return err
+    asyncio.create_task(gw.restart())
+    return JSONResponse({"ok": True})
+
+
 # ── Catch-all proxy for / (non-API paths) ────────────────────────────────────
 async def catch_all_proxy(request: Request):
     """Serve the admin SPA for /setup/*, proxy everything else to dashboard."""
@@ -1240,6 +1344,11 @@ def create_app() -> Starlette:
         Route("/api/oauth/xai/start",  api_oauth_xai_start,  methods=["POST"]),
         Route("/api/oauth/xai/status", api_oauth_xai_status, methods=["GET"]),
         Route("/api/oauth/xai/delete", api_oauth_xai_delete, methods=["POST"]),
+        # MCP server management
+        Route("/api/mcp",       api_mcp_get,      methods=["GET"]),
+        Route("/api/mcp",       api_mcp_put,      methods=["PUT"]),
+        Route("/api/mcp",       api_mcp_delete,   methods=["DELETE"]),
+        Route("/api/mcp/restart", api_mcp_restart, methods=["POST"]),
         # WebSocket proxy endpoints
         WebSocketRoute("/api/pty",     _proxy_ws),
         WebSocketRoute("/api/ws",      _proxy_ws),
