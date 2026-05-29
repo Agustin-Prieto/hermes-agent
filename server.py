@@ -1244,8 +1244,10 @@ def create_app() -> Starlette:
         WebSocketRoute("/api/pty",     _proxy_ws),
         WebSocketRoute("/api/ws",      _proxy_ws),
         WebSocketRoute("/api/events",  _proxy_ws),
-        # Catch-all for SPA routes and dashboard proxy
-        Route("/{path:path}", catch_all_proxy),
+        # Catch-all for SPA routes and dashboard proxy (all HTTP methods).
+        # The Hermes dashboard SPA sends POST/PUT/DELETE to its API endpoints,
+        # and these must be proxied through — not rejected with 405.
+        Route("/{path:path}", catch_all_proxy, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]),
     ]
     return Starlette(routes=routes, lifespan=lifespan)
 
