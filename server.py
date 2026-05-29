@@ -456,7 +456,7 @@ class Gateway:
                   f"provider_key={'set' if provider_key else '⚠ NOT SET'}", flush=True)
             write_config_yaml(read_env(ENV_FILE))
             self.proc = await asyncio.create_subprocess_exec(
-                "hermes", "gateway",
+                "hermes", "gateway", "run", "--replace",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
