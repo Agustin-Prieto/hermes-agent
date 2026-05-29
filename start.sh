@@ -2,10 +2,11 @@
 set -e
 
 # ── Volume permissions fix ────────────────────────────────────────────────────
-# Railway volumes are mounted as root. Our container drops to 'hermes' (UID 1000)
-# after init. Ensure /data is writable by the hermes user before proceeding.
-# This is a no-op on local Docker where the volume was already chowned at build time.
-chown hermes:hermes /data 2>/dev/null || true
+# Railway volumes are mounted as root. Our container runs as root during init
+# and drops to 'hermes' (UID 1000) after setup. Create all directories FIRST,
+# then fix ownership recursively so both /data and its contents are writable
+# by the hermes user at runtime.
+# This is a no-op on local Docker where the volume was already chowned at build.
 
 # Prepare every directory Hermes expects on a fresh volume.
 # Without these, hermes dashboard endpoints can fail opaquely.
@@ -44,6 +45,10 @@ fi
 # Hermes does not clean this on SIGTERM, so a persistent volume would
 # cause every subsequent boot to exit with a PID-file race error.
 rm -f /data/.hermes/gateway.pid
+
+# ── Fix ownership of everything in /data ──────────────────────────────────────
+# This runs AFTER mkdir/cp/touch so the hermes user can write to all files.
+chown -R hermes:hermes /data 2>/dev/null || true
 
 # Drop privileges from root to hermes and exec the Python server.
 exec gosu hermes:hermes python /app/server.py
