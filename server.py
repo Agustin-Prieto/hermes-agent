@@ -958,12 +958,19 @@ async def _proxy_ws(ws: WebSocket):
     relay_task = asyncio.create_task(relay_upstream())
 
     try:
-        async for msg in ws.iter_json():
+        while True:
+            msg = await ws.receive_text()
             if ws.client_state == WebSocketState.DISCONNECTED:
                 break
-            await upstream_ws.send(json.dumps(msg))
+            try:
+                parsed = json.loads(msg)
+                await upstream_ws.send(json.dumps(parsed))
+            except json.JSONDecodeError:
+                await upstream_ws.send(msg)
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        print(f"[proxy-ws] client send error: {e}", flush=True)
     finally:
         relay_task.cancel()
         try:

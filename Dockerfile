@@ -30,6 +30,14 @@ RUN git clone --depth 1 --branch ${HERMES_REF} \
 # ── Runtime stage ────────────────────────────────────────────────────────────
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
+# Install runtime system deps: curl (for Hermes' Node.js auto-installer),
+# ca-certificates (for HTTPS), and Node.js (for Hermes browser tools).
+# The Debian bookworm nodejs package is sufficient for Hermes' needs and avoids
+# the runtime curl-based nodesource installer that fails without curl.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy tini from builder (tiny init for zombie reaping + signal forwarding).
 COPY --from=builder /usr/bin/tini /usr/bin/tini
 
@@ -47,7 +55,13 @@ COPY requirements.txt /app/requirements.txt
 RUN uv pip install --system --no-cache -r /app/requirements.txt && \
     rm -rf /root/.cache
 
-# Create non-root user and data directory.
+# Copy app code and set permissions while still root.
+COPY server.py /app/server.py
+COPY templates/ /app/templates/
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+# Create non-root user, data directory, and fix ownership of app files.
 RUN groupadd -r hermes -g 1000 && \
     useradd -r -g hermes -u 1000 -d /data -s /bin/bash hermes && \
     mkdir -p /data/.hermes && \
@@ -60,11 +74,6 @@ ENV HERMES_HOME=/data/.hermes
 ENV HERMES_TUI_DIR=/opt/hermes-agent/ui-tui
 
 WORKDIR /app
-
-COPY server.py /app/server.py
-COPY templates/ /app/templates/
-COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
 
 EXPOSE 8080
 
