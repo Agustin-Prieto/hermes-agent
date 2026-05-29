@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# ── Volume permissions fix ────────────────────────────────────────────────────
+# Railway volumes are mounted as root. Our container drops to 'hermes' (UID 1000)
+# after init. Ensure /data is writable by the hermes user before proceeding.
+# This is a no-op on local Docker where the volume was already chowned at build time.
+chown hermes:hermes /data 2>/dev/null || true
+
 # Prepare every directory Hermes expects on a fresh volume.
 # Without these, hermes dashboard endpoints can fail opaquely.
 mkdir -p /data/.hermes/cron \
@@ -39,4 +45,5 @@ fi
 # cause every subsequent boot to exit with a PID-file race error.
 rm -f /data/.hermes/gateway.pid
 
-exec python /app/server.py
+# Drop privileges from root to hermes and exec the Python server.
+exec gosu hermes:hermes python /app/server.py

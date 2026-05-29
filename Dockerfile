@@ -61,13 +61,17 @@ COPY templates/ /app/templates/
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
+# Install gosu for privilege dropping (used by start.sh to fix volume permissions).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gosu && \
+    rm -rf /var/lib/apt/lists/*
+
 # Create non-root user, data directory, and fix ownership of app files.
 RUN groupadd -r hermes -g 1000 && \
     useradd -r -g hermes -u 1000 -d /data -s /bin/bash hermes && \
     mkdir -p /data/.hermes && \
     chown -R hermes:hermes /data /app /opt/hermes-agent
 
-USER hermes:hermes
 ENV HOME=/data
 ENV HERMES_HOME=/data/.hermes
 # Point Hermes at our pre-built TUI bundle to skip npm install on first use.
@@ -78,5 +82,6 @@ WORKDIR /app
 EXPOSE 8080
 
 # tini runs as PID 1; -g propagates signals to the whole process group.
+# start.sh runs as root, fixes volume permissions, then drops to hermes via gosu.
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["/app/start.sh"]
