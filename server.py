@@ -910,16 +910,16 @@ async def _proxy_to_dashboard(request: Request) -> Response:
     )
 
 
-async def _proxy_ws(request: Request) -> Response:
+async def _proxy_ws(ws: WebSocket):
     """WebSocket proxy → Hermes dashboard.
 
     Connects to the upstream FIRST, and only accepts the client if the upstream
     is available. This prevents accepting a WebSocket only to immediately fail
     because the Hermes dashboard isn't ready yet.
     """
-    target = f"ws://{HERMES_DASHBOARD_HOST}:{HERMES_DASHBOARD_PORT}{request.url.path}"
-    if request.url.query:
-        target = f"{target}?{request.url.query}"
+    target = f"ws://{HERMES_DASHBOARD_HOST}:{HERMES_DASHBOARD_PORT}{ws.url.path}"
+    if ws.url.query:
+        target = f"{target}?{ws.url.query}"
 
     # Try upstream connection first — fail fast if dashboard isn't ready.
     try:
@@ -928,22 +928,19 @@ async def _proxy_ws(request: Request) -> Response:
             timeout=5.0,
         )
     except asyncio.TimeoutError:
-        print(f"[proxy-ws] upstream timeout for {request.url.path}", flush=True)
-        ws = WebSocket(request)
+        print(f"[proxy-ws] upstream timeout for {ws.url.path}", flush=True)
         await ws.accept()
         await ws.send_json({"error": "Dashboard not ready yet", "type": "error"})
         await ws.close()
         return
     except Exception as e:
-        print(f"[proxy-ws] upstream unavailable for {request.url.path}: {e}", flush=True)
-        ws = WebSocket(request)
+        print(f"[proxy-ws] upstream unavailable for {ws.url.path}: {e}", flush=True)
         await ws.accept()
         await ws.send_json({"error": "Dashboard unavailable", "type": "error"})
         await ws.close()
         return
 
     # Upstream is connected, now accept the client.
-    ws = WebSocket(request)
     await ws.accept()
 
     async def relay_upstream():
