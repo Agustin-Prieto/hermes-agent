@@ -46,6 +46,14 @@ fi
 # cause every subsequent boot to exit with a PID-file race error.
 rm -f /data/.hermes/gateway.pid
 
+# ── Persist Google Sheets credentials to a file ──────────────────────────────
+# MCP servers started by Hermes don't inherit all env vars, so we write the
+# credential to a well-known path that google-sheets-server.py can read.
+if [ -n "${GOOGLE_SHEETS_CREDENTIALS}" ]; then
+  printf '%s' "${GOOGLE_SHEETS_CREDENTIALS}" > /data/.google-sheets-creds.json
+  chmod 600 /data/.google-sheets-creds.json
+fi
+
 # ── Fix ownership of everything in /data ──────────────────────────────────────
 # This runs AFTER mkdir/cp/touch so the hermes user can write to all files.
 chown -R hermes:hermes /data 2>/dev/null || true

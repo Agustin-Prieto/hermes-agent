@@ -38,13 +38,16 @@ def get_creds():
         info = json.loads(creds_json)
         return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
 
+    # Fallback: file written by start.sh (Hermes MCP servers don't inherit all env vars)
     creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-    if creds_file and os.path.exists(creds_file):
+    if not creds_file or not os.path.exists(creds_file):
+        creds_file = "/data/.google-sheets-creds.json"
+    if os.path.exists(creds_file):
         return service_account.Credentials.from_service_account_file(creds_file, scopes=SCOPES)
 
     raise ValueError(
         "No Google credentials found. Set GOOGLE_SHEETS_CREDENTIALS (JSON service account) "
-        "or GOOGLE_APPLICATION_CREDENTIALS (file path)."
+        "in Railway env vars, or GOOGLE_APPLICATION_CREDENTIALS (file path)."
     )
 
 
