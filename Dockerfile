@@ -58,6 +58,7 @@ RUN uv pip install --system --no-cache -r /app/requirements.txt && \
 # Copy app code and set permissions while still root.
 COPY server.py /app/server.py
 COPY templates/ /app/templates/
+COPY mcp-servers/ /app/mcp-servers/
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
