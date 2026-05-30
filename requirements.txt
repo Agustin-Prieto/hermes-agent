@@ -11,4 +11,3 @@ pyyaml>=6.0
 # Google Sheets MCP server dependencies
 google-auth>=2.0.0
 google-api-python-client>=2.0.0
-mcp>=1.0.0
