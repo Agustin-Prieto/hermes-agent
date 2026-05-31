@@ -39,6 +39,8 @@ import websockets
 import websockets.exceptions
 import yaml
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import (
     HTMLResponse,
@@ -1574,7 +1576,13 @@ def create_app() -> Starlette:
         # and these must be proxied through — not rejected with 405.
         Route("/{path:path}", catch_all_proxy, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]),
     ]
-    return Starlette(routes=routes, lifespan=lifespan)
+    return Starlette(
+        routes=routes,
+        lifespan=lifespan,
+        middleware=[
+            Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
+        ],
+    )
 
 
 if __name__ == "__main__":
