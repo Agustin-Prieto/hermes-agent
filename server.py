@@ -1468,10 +1468,21 @@ async def api_sheets_finance(request: Request):
         dates_rows = dates_result.get("values", [])
         bancos_fechas = {}
         for row in dates_rows:
-            if not row:
+            if not row or len(row) < 2:
                 continue
-            nombre = row[0].replace("Mercado Libre", "MercadoLibre").replace("Mercado ", "Mercado")
-            # Find numeric values: skip non-numeric, take first two numbers
+            nombre = row[0].strip()
+            # Normalize bank names
+            if "mercadolibre" in nombre.lower().replace(" ", ""):
+                nombre = "MercadoLibre"
+            elif "macro" in nombre.lower() and len(row) >= 4:
+                nombre = "Macro"
+            elif "icbc" in nombre.lower() and len(row) >= 4:
+                nombre = "ICBC"
+            elif "galicia" in nombre.lower():
+                nombre = "Galicia"
+            else:
+                continue  # Skip unknown rows
+
             numeros = [v for v in row[1:] if v.strip().lstrip("-").replace(".", "").isdigit()]
             if len(numeros) >= 2:
                 bancos_fechas[nombre] = {
