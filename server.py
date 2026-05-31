@@ -1439,8 +1439,8 @@ async def api_sheets_finance(request: Request):
 
         sheets_api = service.spreadsheets().values()
 
-        # ── Tablero de Control (row 17 = current month data) ──
-        tablero = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A17:N17").execute()
+        # ── Tablero de Control (row 18 = current month data) ──
+        tablero = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A18:N18").execute()
         t = tablero.get("values", [[]])[0]
         # A=Mes, B=Ingreso, C=% Ahorro, D=Tope Gasto, E=Total Gastado
         # F=% Uso, G=Semáforo, H=Exigible Galicia, I=Exigible Macro
