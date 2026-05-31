@@ -1463,6 +1463,18 @@ async def api_sheets_finance(request: Request):
         total_exigible = parse_ars(t[11]) if len(t) > 11 else 0
         fci = parse_ars(t[12]) if len(t) > 12 else 0
 
+        # ── Bank dates from Tablero rows 10-13 ──
+        dates_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A10:E13").execute()
+        dates_rows = dates_result.get("values", [])
+        bancos_fechas = {}
+        for row in dates_rows:
+            if len(row) >= 3:
+                nombre = row[0].replace("Mercado Libre", "MercadoLibre")
+                bancos_fechas[nombre] = {
+                    "cierre": row[1],
+                    "vencimiento": row[2],
+                }
+
         # ── Presupuesto ──
         pres_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{presupuesto_name or 'Presupuesto'}!A:G").execute()
         pres_rows = pres_result.get("values", [])
@@ -1490,7 +1502,13 @@ async def api_sheets_finance(request: Request):
         tcs = []
         for banco, exig in [("Galicia", galicia), ("Macro", macro), ("ICBC", icbc), ("MercadoLibre", ml)]:
             if exig:
-                tcs.append({"banco": banco, "exigible": round(exig, 2)})
+                fecha = bancos_fechas.get(banco, {})
+                tcs.append({
+                    "banco": banco,
+                    "exigible": round(exig, 2),
+                    "cierre": fecha.get("cierre", ""),
+                    "vencimiento": fecha.get("vencimiento", ""),
+                })
 
         prox_vencimiento = None
         if tcs:
