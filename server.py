@@ -1297,6 +1297,220 @@ async def api_mcp_restart(request: Request):
     return JSONResponse({"ok": True})
 
 
+# ── Google Sheets API for PWA ───────────────────────────────────────────────
+# Reads financial data from the user's personal finance sheet and returns
+# structured JSON consumed by the PWA at /api/sheets.
+# Uses the same GOOGLE_SHEETS_CREDENTIALS service account as the MCP server.
+
+SHEET_ID = "1okMWpcUWUHiLQqIn06BnOFI4jBYf516PEj0GFugXxN0"
+
+
+def _get_sheets_service():
+    """Build a Google Sheets service client using stored credentials."""
+    creds_json = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+    except ImportError:
+        return None, "google-auth or google-api-python-client not installed"
+
+    if not creds_json:
+        # Fallback: file written by start.sh
+        creds_file = "/data/.google-sheets-creds.json"
+        if os.path.exists(creds_file):
+            try:
+                creds = service_account.Credentials.from_service_account_file(
+                    creds_file,
+                    scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+                )
+                return build("sheets", "v4", credentials=creds), None
+            except Exception as e:
+                return None, str(e)
+        return None, "GOOGLE_SHEETS_CREDENTIALS not set"
+    try:
+        info = json.loads(creds_json)
+        creds = service_account.Credentials.from_service_account_info(
+            info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        )
+        return build("sheets", "v4", credentials=creds), None
+    except Exception as e:
+        return None, str(e)
+
+
+def _safe_float(v):
+    try:
+        return float(v) if v else 0.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
+async def api_sheets_finance(request: Request):
+    """GET /api/sheets — return structured financial data from Google Sheets.
+
+    This endpoint is meant to be consumed by the Personal Finance PWA.
+    Returns the same JSON shape as the Apps Script Web App spec.
+    """
+    service, err = _get_sheets_service()
+    if err:
+        return JSONResponse({"error": err}, status_code=500)
+    if service is None:
+        return JSONResponse({"error": "Sheets service unavailable"}, status_code=500)
+
+    try:
+        sheets = service.spreadsheets().values()
+
+        # Tab 1: Tablero de Control (row 18 = current month)
+        tablero = sheets.get(spreadsheetId=SHEET_ID, range="Tablero!A18:N18").execute()
+        t = tablero.get("values", [[]])[0]
+        # A=Mes, B=Ingreso, C=% Ahorro, D=Tope Gasto, E=Total Gastado
+        # F=% Uso, G=Semáforo, H=Exigible Galicia, I=Exigible Macro
+        # J=Exigible ICBC, K=Exigible ML, L=Total Exigible, M=Rescate FCI
+        # N=Deuda Remanente
+        ingreso = _safe_float(t[1]) if len(t) > 1 else 0
+        tope_gasto = _safe_float(t[3]) if len(t) > 3 else 0
+        total_gastado = _safe_float(t[4]) if len(t) > 4 else 0
+        pct_uso = _safe_float(t[5]) if len(t) > 5 else 0
+        semaforo = t[6] if len(t) > 6 else "🟢"
+        galicia = _safe_float(t[7]) if len(t) > 7 else 0
+        macro = _safe_float(t[8]) if len(t) > 8 else 0
+        icbc = _safe_float(t[9]) if len(t) > 9 else 0
+        ml = _safe_float(t[10]) if len(t) > 10 else 0
+        total_exigible = _safe_float(t[11]) if len(t) > 11 else 0
+        fci = _safe_float(t[12]) if len(t) > 12 else 0
+
+        # Inversiones tab (last 2 rows for current month + projection)
+        inv_result = sheets.get(spreadsheetId=SHEET_ID, range="Inversiones!A:G").execute()
+        inv_rows = inv_result.get("values", [])
+        inv_header = inv_rows[0] if inv_rows else []
+        inv_data = inv_rows[-1] if len(inv_rows) > 1 else []
+        capital_actual = _safe_float(inv_data[2]) if len(inv_data) > 2 else fci
+        rendimiento = _safe_float(inv_data[4]) if len(inv_data) > 4 else 0
+        pct_rendimiento = _safe_float(inv_data[5]) if len(inv_data) > 5 else 0
+
+        # Presupuesto tab (all rows, skip header if there's one)
+        pres_result = sheets.get(spreadsheetId=SHEET_ID, range="Presupuesto!A:G").execute()
+        pres_rows = pres_result.get("values", [])
+        presupuesto = []
+        for row in pres_rows[1:]:  # skip header
+            if len(row) >= 3:
+                cat = row[0]
+                ppto = _safe_float(row[1]) if len(row) > 1 else 0
+                gast = _safe_float(row[2]) if len(row) > 2 else 0
+                rest = _safe_float(row[3]) if len(row) > 3 else 0
+                pct = _safe_float(row[4]) if len(row) > 4 else 0
+                sem = row[5] if len(row) > 5 else ("🔴" if pct > 100 else ("🟡" if pct > 50 else "🟢"))
+                presupuesto.append({
+                    "categoria": cat, "presupuesto": ppto,
+                    "gastado": gast, "restante": rest,
+                    "pct": round(pct, 1), "semaforo": sem
+                })
+
+        # Compute merged dashboard
+        total_exigible_list = []
+        if galicia:
+            total_exigible_list.append({"banco": "Galicia", "exigible": galicia})
+        if macro:
+            total_exigible_list.append({"banco": "Macro", "exigible": macro})
+        if icbc:
+            total_exigible_list.append({"banco": "ICBC", "exigible": icbc})
+        if ml:
+            total_exigible_list.append({"banco": "MercadoLibre", "exigible": ml})
+
+        # Find next due date (first exigible that's due soon)
+        prox_vencimiento = None
+        if total_exigible_list:
+            # Simple heuristic: take the first one or the largest
+            top = max(total_exigible_list, key=lambda x: x["exigible"])
+            # Figure out the due date from the tcs endpoint (we'll compute)
+            prox_vencimiento = {
+                "concepto": "TCs por vencer",
+                "monto": total_exigible,
+                "entidades": [e["banco"] for e in total_exigible_list],
+            }
+
+        # Metas tab
+        metas_result = sheets.get(spreadsheetId=SHEET_ID, range="Metas!A:I").execute()
+        metas_rows = metas_result.get("values", [])
+        metas = []
+        for row in metas_rows[1:]:
+            if len(row) >= 1:
+                nombre = row[0]
+                objetivo = _safe_float(row[1]) if len(row) > 1 else 0
+                ahorrado = _safe_float(row[2]) if len(row) > 2 else 0
+                progreso = round((ahorrado / objetivo * 100)) if objetivo > 0 else 0
+                m = {"nombre": nombre, "objetivo": objetivo, "ahorrado": ahorrado, "progreso": progreso}
+                if len(row) > 7:
+                    m["estado"] = row[7]
+                metas.append(m)
+
+        # Salud tab
+        salud_result = sheets.get(spreadsheetId=SHEET_ID, range="Salud!A:H").execute()
+        salud_rows = salud_result.get("values", [])
+        salud = []
+        for row in salud_rows[1:]:
+            if len(row) >= 1:
+                s = {"profesional": row[0]}
+                if len(row) > 1: s["motivo"] = row[1]
+                if len(row) > 4: s["costo_est"] = _safe_float(row[4])
+                if len(row) > 6: s["estado"] = row[6]
+                salud.append(s)
+
+        # Suscripciones tab
+        subs_result = sheets.get(spreadsheetId=SHEET_ID, range="Suscripciones!A:H").execute()
+        subs_rows = subs_result.get("values", [])
+        suscripciones = []
+        for row in subs_rows[1:]:
+            if len(row) >= 1:
+                s = {"servicio": row[0]}
+                if len(row) > 1: s["monto_mes"] = _safe_float(row[1])
+                if len(row) > 3: s["monto_anio"] = _safe_float(row[3])
+                if len(row) > 5: s["activo"] = row[5].lower() in ("true", "sí", "si", "1", "yes")
+                suscripciones.append(s)
+
+        # Expenses tab (last 50 for reference)
+        exp_result = sheets.get(spreadsheetId=SHEET_ID, range="Registro!A2:J51").execute()
+        exp_rows = exp_result.get("values", [])
+        registro = []
+        for row in exp_rows:
+            if len(row) >= 4:
+                registro.append({
+                    "fecha": row[0], "comercio": row[2] if len(row) > 2 else "",
+                    "categoria": row[3] if len(row) > 3 else "",
+                    "monto": _safe_float(row[4]) if len(row) > 4 else 0,
+                })
+
+        # Build response matching the PWA spec
+        result = {
+            "dashboard": {
+                "ingreso": ingreso,
+                "tope_gasto": tope_gasto,
+                "total_gastado": total_gastado,
+                "pct_uso": round(pct_uso, 1),
+                "semaforo": semaforo,
+                "capital_fci": fci,
+                "rendimiento_fci": rendimiento,
+                "prox_vencimiento": prox_vencimiento,
+            },
+            "presupuesto": presupuesto,
+            "tcs": total_exigible_list,
+            "inversiones": [{
+                "capital": capital_actual,
+                "rendimiento": rendimiento,
+                "pct_rendimiento": round(pct_rendimiento, 2),
+            }],
+            "metas": metas,
+            "salud": salud,
+            "suscripciones": suscripciones,
+            "registro": registro,
+        }
+
+        return JSONResponse(result)
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── Catch-all proxy for / (non-API paths) ────────────────────────────────────
 async def catch_all_proxy(request: Request):
     """Serve the admin SPA for /setup/*, proxy everything else to dashboard."""
@@ -1349,6 +1563,8 @@ def create_app() -> Starlette:
         Route("/api/mcp",       api_mcp_put,      methods=["PUT"]),
         Route("/api/mcp",       api_mcp_delete,   methods=["DELETE"]),
         Route("/api/mcp/restart", api_mcp_restart, methods=["POST"]),
+        # Google Sheets finance endpoint for PWA
+        Route("/api/sheets", api_sheets_finance, methods=["GET"]),
         # WebSocket proxy endpoints
         WebSocketRoute("/api/pty",     _proxy_ws),
         WebSocketRoute("/api/ws",      _proxy_ws),
