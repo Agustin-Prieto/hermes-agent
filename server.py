@@ -1360,10 +1360,34 @@ async def api_sheets_finance(request: Request):
         return JSONResponse({"error": "Sheets service unavailable"}, status_code=500)
 
     try:
-        sheets = service.spreadsheets().values()
+        # Discover all sheet names dynamically
+        metadata = service.spreadsheets().get(spreadsheetId=SHEET_ID, fields="sheets.properties.title,sheets.properties.sheetId").execute()
+        all_sheets = [s["properties"]["title"] for s in metadata.get("sheets", [])]
+        print(f"[sheets] Available tabs: {all_sheets}", flush=True)
 
-        # Tab 1: Tablero de Control (row 18 = current month)
-        tablero = sheets.get(spreadsheetId=SHEET_ID, range="Tablero!A18:N18").execute()
+        # Map expected sheet names to actual names
+        def find_sheet(name_hints):
+            for hint in name_hints:
+                for s in all_sheets:
+                    if hint in s.lower():
+                        return s
+            return all_sheets[0] if all_sheets else None
+
+        tablero_name = find_sheet(["tablero", "dashboard", "control"])
+        presupuesto_name = find_sheet(["presupuesto", "presup", "budget"])
+        inversiones_name = find_sheet(["inversiones", "inversion", "invers"])
+        metas_name = find_sheet(["metas", "goals", "meta"])
+        salud_name = find_sheet(["salud", "health", "sal"])
+        subs_name = find_sheet(["suscripciones", "suscrip", "subscriptions"])
+        registro_name = find_sheet(["registro", "gastos", "expenses", "registro"])
+
+        if not tablero_name:
+            return JSONResponse({"error": f"No sheets found in document. Available: {all_sheets}"}, status_code=500)
+
+        sheets_api = service.spreadsheets().values()
+
+        # Tab 1: Tablero (row 18 = current month)
+        tablero = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A18:N18").execute()
         t = tablero.get("values", [[]])[0]
         # A=Mes, B=Ingreso, C=% Ahorro, D=Tope Gasto, E=Total Gastado
         # F=% Uso, G=Semáforo, H=Exigible Galicia, I=Exigible Macro
@@ -1382,7 +1406,7 @@ async def api_sheets_finance(request: Request):
         fci = _safe_float(t[12]) if len(t) > 12 else 0
 
         # Inversiones tab (last 2 rows for current month + projection)
-        inv_result = sheets.get(spreadsheetId=SHEET_ID, range="Inversiones!A:G").execute()
+        inv_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{inversiones_name or 'Inversiones'}!A:G").execute()
         inv_rows = inv_result.get("values", [])
         inv_header = inv_rows[0] if inv_rows else []
         inv_data = inv_rows[-1] if len(inv_rows) > 1 else []
@@ -1391,7 +1415,7 @@ async def api_sheets_finance(request: Request):
         pct_rendimiento = _safe_float(inv_data[5]) if len(inv_data) > 5 else 0
 
         # Presupuesto tab (all rows, skip header if there's one)
-        pres_result = sheets.get(spreadsheetId=SHEET_ID, range="Presupuesto!A:G").execute()
+        pres_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{presupuesto_name or 'Presupuesto'}!A:G").execute()
         pres_rows = pres_result.get("values", [])
         presupuesto = []
         for row in pres_rows[1:]:  # skip header
@@ -1432,7 +1456,7 @@ async def api_sheets_finance(request: Request):
             }
 
         # Metas tab
-        metas_result = sheets.get(spreadsheetId=SHEET_ID, range="Metas!A:I").execute()
+        metas_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{metas_name or 'Metas'}!A:I").execute()
         metas_rows = metas_result.get("values", [])
         metas = []
         for row in metas_rows[1:]:
@@ -1447,7 +1471,7 @@ async def api_sheets_finance(request: Request):
                 metas.append(m)
 
         # Salud tab
-        salud_result = sheets.get(spreadsheetId=SHEET_ID, range="Salud!A:H").execute()
+        salud_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{salud_name or 'Salud'}!A:H").execute()
         salud_rows = salud_result.get("values", [])
         salud = []
         for row in salud_rows[1:]:
@@ -1459,7 +1483,7 @@ async def api_sheets_finance(request: Request):
                 salud.append(s)
 
         # Suscripciones tab
-        subs_result = sheets.get(spreadsheetId=SHEET_ID, range="Suscripciones!A:H").execute()
+        subs_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{subs_name or 'Suscripciones'}!A:H").execute()
         subs_rows = subs_result.get("values", [])
         suscripciones = []
         for row in subs_rows[1:]:
@@ -1471,7 +1495,7 @@ async def api_sheets_finance(request: Request):
                 suscripciones.append(s)
 
         # Expenses tab (last 50 for reference)
-        exp_result = sheets.get(spreadsheetId=SHEET_ID, range="Registro!A2:J51").execute()
+        exp_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{registro_name or 'Registro'}!A2:J51").execute()
         exp_rows = exp_result.get("values", [])
         registro = []
         for row in exp_rows:
