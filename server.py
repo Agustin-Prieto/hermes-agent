@@ -1381,13 +1381,12 @@ async def api_sheets_finance(request: Request):
         subs_name = find_sheet(["suscripciones", "suscrip", "subscriptions"])
         registro_name = find_sheet(["registro", "gastos", "expenses", "registro"])
 
-        if not tablero_name:
-            return JSONResponse({"error": f"No sheets found in document. Available: {all_sheets}"}, status_code=500)
-
-        sheets_api = service.spreadsheets().values()
-
-        # Tab 1: Tablero (row 18 = current month)
-        tablero = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A18:N18").execute()
+        # ⚠️ DEBUG: Return raw sheet data to understand column layout
+        debug = {}
+        for s in all_sheets:
+            result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{s}!1:20").execute()
+            debug[s] = result.get("values", [])
+        return JSONResponse({"debug": True, "sheets": debug})
         t = tablero.get("values", [[]])[0]
         # A=Mes, B=Ingreso, C=% Ahorro, D=Tope Gasto, E=Total Gastado
         # F=% Uso, G=Semáforo, H=Exigible Galicia, I=Exigible Macro
