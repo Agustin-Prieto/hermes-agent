@@ -1468,11 +1468,15 @@ async def api_sheets_finance(request: Request):
         dates_rows = dates_result.get("values", [])
         bancos_fechas = {}
         for row in dates_rows:
-            if len(row) >= 3:
-                nombre = row[0].replace("Mercado Libre", "MercadoLibre")
+            if not row:
+                continue
+            nombre = row[0].replace("Mercado Libre", "MercadoLibre").replace("Mercado ", "Mercado")
+            # Find numeric values: skip non-numeric, take first two numbers
+            numeros = [v for v in row[1:] if v.strip().lstrip("-").replace(".", "").isdigit()]
+            if len(numeros) >= 2:
                 bancos_fechas[nombre] = {
-                    "cierre": row[1],
-                    "vencimiento": row[2],
+                    "cierre": numeros[0],
+                    "vencimiento": numeros[1],
                 }
 
         # ── Presupuesto ──
@@ -1584,6 +1588,7 @@ async def api_sheets_finance(request: Request):
             },
             "presupuesto": presupuesto,
             "tcs": tcs,
+            "bancos_fechas": bancos_fechas,
             "inversiones": [{
                 "capital": round(capital_actual, 2),
                 "rendimiento": round(rendimiento, 2),
