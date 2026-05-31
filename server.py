@@ -1380,8 +1380,14 @@ def parse_ars(val):
     last_dot = s.rfind(".")
 
     if last_comma > last_dot:
-        # Last separator is COMMA → ARS format (comma = decimal, dots = thousands)
-        s = s.replace(".", "").replace(",", ".")
+        # Last separator is COMMA → ARS format (comma could be decimal or thousands)
+        after_comma = s[last_comma + 1:] if last_comma >= 0 else ""
+        if len(after_comma) >= 3:
+            # 3+ digits after last comma → thousands separator → remove comma
+            s = s.replace(",", "").replace(".", "")
+        else:
+            # 1-2 digits after last comma → decimal separator → ARS format
+            s = s.replace(".", "").replace(",", ".")
     else:
         # Last separator is DOT → could be decimal or ARS thousands
         after_dot = s[last_dot + 1:] if last_dot >= 0 else ""
