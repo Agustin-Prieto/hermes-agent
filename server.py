@@ -1381,6 +1381,9 @@ async def api_sheets_finance(request: Request):
         subs_name = find_sheet(["suscripciones", "suscrip", "subscriptions"])
         registro_name = find_sheet(["registro", "gastos", "expenses", "registro"])
 
+        sheets_api = service.spreadsheets().values()
+        registro_name = find_sheet(["registro", "gastos", "expenses", "registro"])
+
         # ⚠️ DEBUG: Return raw sheet data to understand column layout
         debug = {}
         for s in all_sheets:
