@@ -1347,6 +1347,31 @@ def _safe_float(v):
         return 0.0
 
 
+def parse_ars(val):
+    """Parse Argentine-formatted monetary values.
+
+    Handles: $3,639,427.00, $30.000,00, $350.000, 41.0%, 281059.98, $281,059.98
+    """
+    if not val:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().replace("$", "").strip().replace("%", "").strip()
+    if not s:
+        return 0.0
+    # Try standard float first
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    # Argentine format: remove thousands dots, replace decimal comma with period
+    s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 async def api_sheets_finance(request: Request):
     """GET /api/sheets — return structured financial data from Google Sheets.
 
@@ -1384,95 +1409,82 @@ async def api_sheets_finance(request: Request):
         sheets_api = service.spreadsheets().values()
         registro_name = find_sheet(["registro", "gastos", "expenses", "registro"])
 
-        # ⚠️ DEBUG: Return raw sheet data to understand column layout
-        debug = {}
-        for s in all_sheets:
-            result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{s}!1:20").execute()
-            debug[s] = result.get("values", [])
-        return JSONResponse({"debug": True, "sheets": debug})
+        if not tablero_name:
+            return JSONResponse({"error": f"No sheets found. Available: {all_sheets}"}, status_code=500)
+
+        sheets_api = service.spreadsheets().values()
+
+        # ── Tablero de Control (row 17 = current month data) ──
+        tablero = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A17:N17").execute()
         t = tablero.get("values", [[]])[0]
         # A=Mes, B=Ingreso, C=% Ahorro, D=Tope Gasto, E=Total Gastado
         # F=% Uso, G=Semáforo, H=Exigible Galicia, I=Exigible Macro
         # J=Exigible ICBC, K=Exigible ML, L=Total Exigible, M=Rescate FCI
-        # N=Deuda Remanente
-        ingreso = _safe_float(t[1]) if len(t) > 1 else 0
-        tope_gasto = _safe_float(t[3]) if len(t) > 3 else 0
-        total_gastado = _safe_float(t[4]) if len(t) > 4 else 0
-        pct_uso = _safe_float(t[5]) if len(t) > 5 else 0
+        ingreso = parse_ars(t[1]) if len(t) > 1 else 0
+        tope_gasto = parse_ars(t[3]) if len(t) > 3 else 0
+        total_gastado = parse_ars(t[4]) if len(t) > 4 else 0
+        pct_uso = parse_ars(t[5]) if len(t) > 5 else 0
         semaforo = t[6] if len(t) > 6 else "🟢"
-        galicia = _safe_float(t[7]) if len(t) > 7 else 0
-        macro = _safe_float(t[8]) if len(t) > 8 else 0
-        icbc = _safe_float(t[9]) if len(t) > 9 else 0
-        ml = _safe_float(t[10]) if len(t) > 10 else 0
-        total_exigible = _safe_float(t[11]) if len(t) > 11 else 0
-        fci = _safe_float(t[12]) if len(t) > 12 else 0
+        galicia = parse_ars(t[7]) if len(t) > 7 else 0
+        macro = parse_ars(t[8]) if len(t) > 8 else 0
+        icbc = parse_ars(t[9]) if len(t) > 9 else 0
+        ml = parse_ars(t[10]) if len(t) > 10 else 0
+        total_exigible = parse_ars(t[11]) if len(t) > 11 else 0
+        fci = parse_ars(t[12]) if len(t) > 12 else 0
 
-        # Inversiones tab (last 2 rows for current month + projection)
-        inv_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{inversiones_name or 'Inversiones'}!A:G").execute()
-        inv_rows = inv_result.get("values", [])
-        inv_header = inv_rows[0] if inv_rows else []
-        inv_data = inv_rows[-1] if len(inv_rows) > 1 else []
-        capital_actual = _safe_float(inv_data[2]) if len(inv_data) > 2 else fci
-        rendimiento = _safe_float(inv_data[4]) if len(inv_data) > 4 else 0
-        pct_rendimiento = _safe_float(inv_data[5]) if len(inv_data) > 5 else 0
-
-        # Presupuesto tab (all rows, skip header if there's one)
+        # ── Presupuesto ──
         pres_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{presupuesto_name or 'Presupuesto'}!A:G").execute()
         pres_rows = pres_result.get("values", [])
         presupuesto = []
-        for row in pres_rows[1:]:  # skip header
-            if len(row) >= 3:
-                cat = row[0]
-                ppto = _safe_float(row[1]) if len(row) > 1 else 0
-                gast = _safe_float(row[2]) if len(row) > 2 else 0
-                rest = _safe_float(row[3]) if len(row) > 3 else 0
-                pct = _safe_float(row[4]) if len(row) > 4 else 0
-                sem = row[5] if len(row) > 5 else ("🔴" if pct > 100 else ("🟡" if pct > 50 else "🟢"))
+        for row in pres_rows[1:]:
+            if len(row) >= 2:
                 presupuesto.append({
-                    "categoria": cat, "presupuesto": ppto,
-                    "gastado": gast, "restante": rest,
-                    "pct": round(pct, 1), "semaforo": sem
+                    "categoria": row[0],
+                    "presupuesto": parse_ars(row[1]) if len(row) > 1 else 0,
+                    "gastado": parse_ars(row[2]) if len(row) > 2 else 0,
+                    "restante": parse_ars(row[3]) if len(row) > 3 else 0,
+                    "pct": round(parse_ars(row[4]) if len(row) > 4 else 0, 1),
+                    "semaforo": row[5] if len(row) > 5 else "🟢",
                 })
 
-        # Compute merged dashboard
-        total_exigible_list = []
-        if galicia:
-            total_exigible_list.append({"banco": "Galicia", "exigible": galicia})
-        if macro:
-            total_exigible_list.append({"banco": "Macro", "exigible": macro})
-        if icbc:
-            total_exigible_list.append({"banco": "ICBC", "exigible": icbc})
-        if ml:
-            total_exigible_list.append({"banco": "MercadoLibre", "exigible": ml})
+        # ── Inversiones (last row = current month) ──
+        inv_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{inversiones_name or 'Inversiones'}!A:G").execute()
+        inv_rows = inv_result.get("values", [])
+        inv_current = inv_rows[-1] if len(inv_rows) > 1 else []
+        capital_actual = parse_ars(inv_current[3]) if len(inv_current) > 3 else fci
+        rendimiento = parse_ars(inv_current[4]) if len(inv_current) > 4 else 0
+        pct_rendimiento = parse_ars(inv_current[5]) if len(inv_current) > 5 else 0
 
-        # Find next due date (first exigible that's due soon)
+        # ── TCs from tablero ──
+        tcs = []
+        for banco, exig in [("Galicia", galicia), ("Macro", macro), ("ICBC", icbc), ("MercadoLibre", ml)]:
+            if exig:
+                tcs.append({"banco": banco, "exigible": round(exig, 2)})
+
         prox_vencimiento = None
-        if total_exigible_list:
-            # Simple heuristic: take the first one or the largest
-            top = max(total_exigible_list, key=lambda x: x["exigible"])
-            # Figure out the due date from the tcs endpoint (we'll compute)
+        if tcs:
+            top = max(tcs, key=lambda x: x["exigible"])
             prox_vencimiento = {
                 "concepto": "TCs por vencer",
-                "monto": total_exigible,
-                "entidades": [e["banco"] for e in total_exigible_list],
+                "monto": round(total_exigible, 2),
+                "entidades": [t["banco"] for t in tcs],
             }
 
-        # Metas tab
+        # ── Metas ──
         metas_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{metas_name or 'Metas'}!A:I").execute()
         metas_rows = metas_result.get("values", [])
         metas = []
         for row in metas_rows[1:]:
             if len(row) >= 1:
-                nombre = row[0]
-                objetivo = _safe_float(row[1]) if len(row) > 1 else 0
-                ahorrado = _safe_float(row[2]) if len(row) > 2 else 0
+                objetivo = parse_ars(row[1]) if len(row) > 1 else 0
+                ahorrado = parse_ars(row[2]) if len(row) > 2 else 0
                 progreso = round((ahorrado / objetivo * 100)) if objetivo > 0 else 0
-                m = {"nombre": nombre, "objetivo": objetivo, "ahorrado": ahorrado, "progreso": progreso}
+                m = {"nombre": row[0], "objetivo": objetivo, "ahorrado": ahorrado, "progreso": progreso}
                 if len(row) > 7:
                     m["estado"] = row[7]
                 metas.append(m)
 
-        # Salud tab
+        # ── Salud ──
         salud_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{salud_name or 'Salud'}!A:H").execute()
         salud_rows = salud_result.get("values", [])
         salud = []
@@ -1480,51 +1492,52 @@ async def api_sheets_finance(request: Request):
             if len(row) >= 1:
                 s = {"profesional": row[0]}
                 if len(row) > 1: s["motivo"] = row[1]
-                if len(row) > 4: s["costo_est"] = _safe_float(row[4])
+                if len(row) > 4: s["costo_est"] = parse_ars(row[4])
                 if len(row) > 6: s["estado"] = row[6]
                 salud.append(s)
 
-        # Suscripciones tab
+        # ── Suscripciones ──
         subs_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{subs_name or 'Suscripciones'}!A:H").execute()
         subs_rows = subs_result.get("values", [])
         suscripciones = []
         for row in subs_rows[1:]:
             if len(row) >= 1:
                 s = {"servicio": row[0]}
-                if len(row) > 1: s["monto_mes"] = _safe_float(row[1])
-                if len(row) > 3: s["monto_anio"] = _safe_float(row[3])
-                if len(row) > 5: s["activo"] = row[5].lower() in ("true", "sí", "si", "1", "yes")
+                if len(row) > 1: s["monto_mes"] = parse_ars(row[1])
+                if len(row) > 3: s["monto_anio"] = parse_ars(row[3])
+                if len(row) > 5: s["activo"] = row[5].lower() in ("sí ✅", "si", "sí", "1", "yes", "true", "✅")
                 suscripciones.append(s)
 
-        # Expenses tab (last 50 for reference)
+        # ── Registro de Gastos (last 50 entries) ──
         exp_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{registro_name or 'Registro'}!A2:J51").execute()
         exp_rows = exp_result.get("values", [])
         registro = []
         for row in exp_rows:
             if len(row) >= 4:
                 registro.append({
-                    "fecha": row[0], "comercio": row[2] if len(row) > 2 else "",
+                    "fecha": row[0],
+                    "comercio": row[2] if len(row) > 2 else "",
                     "categoria": row[3] if len(row) > 3 else "",
-                    "monto": _safe_float(row[4]) if len(row) > 4 else 0,
+                    "monto": round(parse_ars(row[4]) if len(row) > 4 else 0, 2),
                 })
 
-        # Build response matching the PWA spec
+        # ── Build response ──
         result = {
             "dashboard": {
-                "ingreso": ingreso,
-                "tope_gasto": tope_gasto,
-                "total_gastado": total_gastado,
+                "ingreso": round(ingreso, 2),
+                "tope_gasto": round(tope_gasto, 2),
+                "total_gastado": round(total_gastado, 2),
                 "pct_uso": round(pct_uso, 1),
                 "semaforo": semaforo,
-                "capital_fci": fci,
-                "rendimiento_fci": rendimiento,
+                "capital_fci": round(fci, 2),
+                "rendimiento_fci": round(rendimiento, 2),
                 "prox_vencimiento": prox_vencimiento,
             },
             "presupuesto": presupuesto,
-            "tcs": total_exigible_list,
+            "tcs": tcs,
             "inversiones": [{
-                "capital": capital_actual,
-                "rendimiento": rendimiento,
+                "capital": round(capital_actual, 2),
+                "rendimiento": round(rendimiento, 2),
                 "pct_rendimiento": round(pct_rendimiento, 2),
             }],
             "metas": metas,
