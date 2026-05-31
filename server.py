@@ -1348,24 +1348,49 @@ def _safe_float(v):
 
 
 def parse_ars(val):
-    """Parse Argentine-formatted monetary values.
+    """Parse Argentine-formatted monetary values to float.
 
-    Handles: $3,639,427.00, $30.000,00, $350.000, 41.0%, 281059.98, $281,059.98
+    Handles all formats found in the sheet:
+      $350.000      (dot = thousands, 3 digits)      → 350000.0
+      $30.000,00    (dot = thousands, comma = decimal)  → 30000.0
+      $3,639,427.00 (English format)                  → 3639427.0
+      $281,059.98                                      → 281059.98
+      $200,000.00                                      → 200000.0
+      281059.98     (plain)                           → 281059.98
+      41.0%         (percentage)                       → 41.0
+      30000         (integer)                          → 30000.0
     """
     if not val:
         return 0.0
     if isinstance(val, (int, float)):
         return float(val)
+
     s = str(val).strip().replace("$", "").strip().replace("%", "").strip()
     if not s:
         return 0.0
-    # Try standard float first
-    try:
-        return float(s)
-    except ValueError:
-        pass
-    # Argentine format: remove thousands dots, replace decimal comma with period
-    s = s.replace(".", "").replace(",", ".")
+
+    # No separators → simple parse
+    if "," not in s and "." not in s:
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+
+    last_comma = s.rfind(",")
+    last_dot = s.rfind(".")
+
+    if last_comma > last_dot:
+        # Last separator is COMMA → ARS format (comma = decimal, dots = thousands)
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        # Last separator is DOT → could be decimal or ARS thousands
+        after_dot = s[last_dot + 1:] if last_dot >= 0 else ""
+        if len(after_dot) == 3 and last_dot > 0:
+            # Exactly 3 digits after dot → ARS thousands separator
+            s = s.replace(".", "")
+        # Remove any remaining commas (English thousands)
+        s = s.replace(",", "")
+
     try:
         return float(s)
     except ValueError:
