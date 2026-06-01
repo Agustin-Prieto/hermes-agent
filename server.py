@@ -48,7 +48,8 @@ from starlette.responses import (
     RedirectResponse,
     Response,
 )
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import Route, WebSocketRoute, Mount
+from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
@@ -1644,6 +1645,8 @@ async def lifespan(app):
 
 def create_app() -> Starlette:
     routes = [
+        # PWA finance app — served as static files from pwa-dist/
+        Mount("/app", app=StaticFiles(directory="pwa-dist", html=True), name="pwa"),
         Route("/",                page_index),
         Route("/health",          route_health),
         Route("/login",           page_login,      methods=["GET"]),
