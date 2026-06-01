@@ -59,6 +59,7 @@ RUN uv pip install --system --no-cache -r /app/requirements.txt && \
 COPY server.py /app/server.py
 COPY templates/ /app/templates/
 COPY mcp-servers/ /app/mcp-servers/
+COPY pwa-dist/ /app/pwa-dist/
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 

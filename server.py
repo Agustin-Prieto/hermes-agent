@@ -1467,7 +1467,6 @@ async def api_sheets_finance(request: Request):
         # ── Bank dates from Tablero rows 10-13 ──
         dates_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A10:E13").execute()
         dates_rows = dates_result.get("values", [])
-        print(f"[sheets] Bank date rows: {dates_rows}", flush=True)
         bancos_fechas = {}
         for row in dates_rows:
             if not row or len(row) < 2:
