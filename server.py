@@ -1464,6 +1464,20 @@ async def api_sheets_finance(request: Request):
         total_exigible = parse_ars(t[11]) if len(t) > 11 else 0
         fci = parse_ars(t[12]) if len(t) > 12 else 0
 
+        # ── Compute current month/year from tablero ──
+        import datetime
+        MESES_ES = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
+                    "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}
+        mes_texto = t[0].strip().lower() if len(t) > 0 else ""
+        current_year = datetime.date.today().year
+        current_month = datetime.date.today().month
+        # Try to parse month from tablero text like "junio 2026"
+        import re as _re
+        m = _re.match(r"([a-z]+)\s*(\d{4})", mes_texto)
+        if m and m.group(1) in MESES_ES:
+            current_month = MESES_ES[m.group(1)]
+            current_year = int(m.group(2))
+
         # ── Bank dates from Tablero rows 10-13 ──
         dates_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A10:E13").execute()
         dates_rows = dates_result.get("values", [])
@@ -1482,13 +1496,37 @@ async def api_sheets_finance(request: Request):
             elif "galicia" in nombre.lower():
                 nombre = "Galicia"
             else:
-                continue  # Skip unknown rows
+                continue
 
             numeros = [v for v in row[1:] if v.strip().lstrip("-").replace(".", "").isdigit()]
             if len(numeros) >= 2:
+                dia_cierre = int(numeros[0])
+                dia_vto = int(numeros[1])
+
+                # Compute full dates
+                def make_date(day, month, year):
+                    try:
+                        d = datetime.date(year, month, day)
+                        return d.strftime("%d/%m/%Y")
+                    except ValueError:
+                        return f"{day:02d}/{month:02d}/{year}"
+
+                # Cierre is always in the current month
+                cierre_date = make_date(dia_cierre, current_month, current_year)
+
+                # Vto: if vto day < cierre day, it's next month; else same month
+                vto_month = current_month + 1 if dia_vto < dia_cierre else current_month
+                vto_year = current_year
+                if vto_month > 12:
+                    vto_month = 1
+                    vto_year += 1
+                vto_date = make_date(dia_vto, vto_month, vto_year)
+
                 bancos_fechas[nombre] = {
-                    "cierre": numeros[0],
-                    "vencimiento": numeros[1],
+                    "cierre": str(dia_cierre),
+                    "vencimiento": str(dia_vto),
+                    "cierre_date": cierre_date,
+                    "vto_date": vto_date,
                 }
 
         # ── Presupuesto ──
