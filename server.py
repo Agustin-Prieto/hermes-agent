@@ -1300,6 +1300,49 @@ async def api_mcp_restart(request: Request):
     return JSONResponse({"ok": True})
 
 
+# ── Generic Google Sheets writer ─────────────────────────────────────────────
+async def api_sheets_update(request: Request):
+    """POST /api/sheets/update — write cells to any sheet.
+
+    Body: { "updates": [{ "range": "Sheet1!A1:B2", "values": [["a","b"],["c","d"]] }] }
+    """
+    if err := guard(request):
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    updates = body.get("updates", [])
+    if not updates:
+        return JSONResponse({"error": "No updates provided"}, status_code=400)
+
+    svc, err = _get_sheets_service(readonly=False)
+    if err:
+        return JSONResponse({"error": err}, status_code=500)
+
+    try:
+        sheets_api = svc.spreadsheets().values()
+        results = []
+        for upd in updates:
+            range_ = upd.get("range", "")
+            values = upd.get("values", [])
+            if not range_ or not values:
+                continue
+            result = sheets_api.update(
+                spreadsheetId=SHEET_ID,
+                range=range_,
+                valueInputOption="USER_ENTERED",
+                body={"values": values},
+            ).execute()
+            results.append({"range": range_, "updated_cells": result.get("updatedCells", 0)})
+
+        return JSONResponse({"ok": True, "results": results})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── Restructure Tablero sheet ──────────────────────────────────────────────
 async def api_sheets_restructure(request: Request):
     """POST /api/sheets/restructure — reorder Tablero de Control for readability."""
@@ -1880,6 +1923,7 @@ def create_app() -> Starlette:
         Route("/api/mcp/restart", api_mcp_restart, methods=["POST"]),
         # Google Sheets finance endpoint for PWA
         Route("/api/sheets", api_sheets_finance, methods=["GET"]),
+        Route("/api/sheets/update", api_sheets_update, methods=["POST"]),
         Route("/api/sheets/restructure", api_sheets_restructure, methods=["POST"]),
         # WebSocket proxy endpoints
         WebSocketRoute("/api/pty",     _proxy_ws),
