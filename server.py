@@ -1300,6 +1300,178 @@ async def api_mcp_restart(request: Request):
     return JSONResponse({"ok": True})
 
 
+# ── Restructure Tablero sheet ──────────────────────────────────────────────
+async def api_sheets_restructure(request: Request):
+    """POST /api/sheets/restructure — reorder Tablero de Control for readability."""
+    if err := guard(request):
+        return err
+
+    try:
+        svc, err = _get_sheets_service(readonly=False)
+        if err:
+            return JSONResponse({"error": err}, status_code=500)
+        if svc is None:
+            return JSONResponse({"error": "Sheets service unavailable"}, status_code=500)
+
+        sheets_api = svc.spreadsheets().values()
+
+        # 1. Read ALL existing data from Tablero
+        all_data = sheets_api.get(spreadsheetId=SHEET_ID, range="Tablero de Control!A:N").execute()
+        rows = all_data.get("values", [])
+
+        if not rows:
+            return JSONResponse({"error": "Tablero de Control is empty"}, status_code=500)
+
+        # 2. Extract key data from current structure
+        # Row 2 (index 1): Ingreso Mensual configuration
+        # Row 16 (index 16): Header: Mes, Ingreso, % Ahorro, Tope Gasto...
+        # Row 17 (index 17): Current month data
+
+        # Extract the monthly data row
+        data_row = rows[17] if len(rows) > 17 else []
+        ingreso = data_row[1] if len(data_row) > 1 else ""
+        pct_ahorro = data_row[2] if len(data_row) > 2 else ""
+        tope_gasto = data_row[3] if len(data_row) > 3 else ""
+        total_gastado = data_row[4] if len(data_row) > 4 else ""
+        pct_uso = data_row[5] if len(data_row) > 5 else ""
+        semaforo = data_row[6] if len(data_row) > 6 else ""
+        galicia = data_row[7] if len(data_row) > 7 else ""
+        macro = data_row[8] if len(data_row) > 8 else ""
+        icbc = data_row[9] if len(data_row) > 9 else ""
+        ml = data_row[10] if len(data_row) > 10 else ""
+        total_exigible = data_row[11] if len(data_row) > 11 else ""
+        fci = data_row[12] if len(data_row) > 12 else ""
+
+        # Bank dates (rows 10-13, indices 10-13)
+        bank_rows = []
+        for idx in [10, 11, 12, 13]:
+            if idx < len(rows):
+                bank_rows.append(rows[idx])
+
+        # 3. Build new structure
+        new_rows = []
+
+        # Section 1: Resumen del Mes
+        new_rows.append(["📊 RESUMEN DEL MES"])
+        new_rows.append([])
+        headers_resumen = ["Concepto", "Valor"]
+        data_resumen = [
+            ["Ingreso Mensual", ingreso],
+            ["Tope Gasto", tope_gasto],
+            ["Total Gastado", total_gastado],
+            ["% Uso", pct_uso],
+            ["% Ahorro", pct_ahorro],
+            ["Estado", semaforo],
+            ["Capital FCI", fci],
+        ]
+        new_rows.append(headers_resumen)
+        new_rows.extend(data_resumen)
+        new_rows.append([])
+        new_rows.append([])
+
+        # Section 2: Exigible por Banco
+        new_rows.append(["💳 EXIGIBLE POR BANCO"])
+        new_rows.append([])
+        new_rows.append(["Banco", "Exigible", "Cierre", "Vencimiento", "Notas"])
+        for bank_row in bank_rows:
+            if len(bank_row) >= 3:
+                name = bank_row[0]
+                # Find the exigible amount for this bank
+                exig = ""
+                if "galicia" in name.lower():
+                    exig = galicia
+                elif "macro" in name.lower():
+                    exig = macro
+                elif "icbc" in name.lower():
+                    exig = icbc
+                elif "mercadolibre" in name.lower() or "mercado" in name.lower():
+                    exig = ml
+                # Extract cierre and vto from bank row
+                nums = [v for v in bank_row[1:] if v.strip().lstrip("-").replace(".", "").isdigit()]
+                cierre = nums[0] if len(nums) > 0 else ""
+                vto = nums[1] if len(nums) > 1 else ""
+                notas = bank_row[-1] if len(bank_row) > 3 and not bank_row[-1].strip().lstrip("-").replace(".", "").isdigit() else ""
+                new_rows.append([name, exig, cierre, vto, notas])
+        new_rows.append([])
+        new_rows.append([])
+
+        # Section 3: Seguimiento Mensual
+        new_rows.append(["📈 SEGUIMIENTO MENSUAL"])
+        new_rows.append([])
+        new_rows.append(["Mes", "Ingreso", "% Ahorro", "Tope Gasto", "Total Gastado", "% Uso", "Semáforo",
+                         "Exigible Galicia", "Exigible Macro", "Exigible ICBC", "Exigible ML",
+                         "Total Exigible", "Rescate FCI", "Deuda Remanente"])
+
+        # Keep existing monthly data rows
+        for i in range(17, len(rows)):
+            if rows[i]:
+                new_rows.append(rows[i])
+
+        # 4. Clear the sheet and write new structure
+        # First clear existing content
+        svc.spreadsheets().values().clear(
+            spreadsheetId=SHEET_ID,
+            range="Tablero de Control!A:N",
+            body={}
+        ).execute()
+
+        # Write new structure
+        body = {"values": new_rows}
+        svc.spreadsheets().values().update(
+            spreadsheetId=SHEET_ID,
+            range="Tablero de Control!A1",
+            valueInputOption="USER_ENTERED",
+            body=body
+        ).execute()
+
+        # 5. Format headers with bold
+        requests = []
+        # Bold the section titles and column headers
+        bold_positions = [0, 2]  # Section title row 1, Resumen headers row 3
+        # Add section 2 title and headers
+        bold_positions.append(len(new_rows) - len(rows) + 17 - 2)  # Section 3 title
+        bold_positions.append(len(new_rows) - len(rows) + 17 - 1)  # Section 3 headers
+
+        # Add bank headers position
+        for idx, row in enumerate(new_rows):
+            if row and row[0] == "💳 EXIGIBLE POR BANCO":
+                bold_positions.append(idx)
+                bold_positions.append(idx + 2)  # Header row
+                break
+
+        format_reqs = []
+        for pos in bold_positions:
+            if 0 <= pos < len(new_rows):
+                format_reqs.append({
+                    "repeatCell": {
+                        "range": {"sheetId": 0, "startRowIndex": pos, "endRowIndex": pos + 1,
+                                  "startColumnIndex": 0, "endColumnIndex": 14},
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                        "fields": "userEnteredFormat.textFormat.bold",
+                    }
+                })
+
+        if format_reqs:
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=SHEET_ID,
+                body={"requests": format_reqs}
+            ).execute()
+
+        return JSONResponse({
+            "ok": True,
+            "message": "Tablero de Control reestructurado",
+            "rows_written": len(new_rows),
+            "structure": {
+                "seccion_1": "Resumen del Mes (filas 1-8)",
+                "seccion_2": "Exigible por Banco (filas 10-16)",
+                "seccion_3": "Seguimiento Mensual (filas 18+)",
+            }
+        })
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── Google Sheets API for PWA ───────────────────────────────────────────────
 # Reads financial data from the user's personal finance sheet and returns
 # structured JSON consumed by the PWA at /api/sheets.
@@ -1308,8 +1480,8 @@ async def api_mcp_restart(request: Request):
 SHEET_ID = "1okMWpcUWUHiLQqIn06BnOFI4jBYf516PEj0GFugXxN0"
 
 
-def _get_sheets_service():
-    """Build a Google Sheets service client using stored credentials."""
+def _get_sheets_service(readonly=True):
+    """Build a Google Sheets service client."""
     creds_json = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
     try:
         from google.oauth2 import service_account
@@ -1317,25 +1489,21 @@ def _get_sheets_service():
     except ImportError:
         return None, "google-auth or google-api-python-client not installed"
 
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"] if not readonly else ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
     if not creds_json:
         # Fallback: file written by start.sh
         creds_file = "/data/.google-sheets-creds.json"
         if os.path.exists(creds_file):
             try:
-                creds = service_account.Credentials.from_service_account_file(
-                    creds_file,
-                    scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-                )
+                creds = service_account.Credentials.from_service_account_file(creds_file, scopes=scopes)
                 return build("sheets", "v4", credentials=creds), None
             except Exception as e:
                 return None, str(e)
         return None, "GOOGLE_SHEETS_CREDENTIALS not set"
     try:
         info = json.loads(creds_json)
-        creds = service_account.Credentials.from_service_account_info(
-            info,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        )
+        creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
         return build("sheets", "v4", credentials=creds), None
     except Exception as e:
         return None, str(e)
@@ -1712,6 +1880,7 @@ def create_app() -> Starlette:
         Route("/api/mcp/restart", api_mcp_restart, methods=["POST"]),
         # Google Sheets finance endpoint for PWA
         Route("/api/sheets", api_sheets_finance, methods=["GET"]),
+        Route("/api/sheets/restructure", api_sheets_restructure, methods=["POST"]),
         # WebSocket proxy endpoints
         WebSocketRoute("/api/pty",     _proxy_ws),
         WebSocketRoute("/api/ws",      _proxy_ws),
