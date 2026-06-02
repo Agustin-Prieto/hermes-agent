@@ -1632,6 +1632,12 @@ async def api_sheets_finance(request: Request):
         metadata = service.spreadsheets().get(spreadsheetId=SHEET_ID, fields="sheets.properties.title,sheets.properties.sheetId").execute()
         all_sheets = [s["properties"]["title"] for s in metadata.get("sheets", [])]
         print(f"[sheets] Available tabs: {all_sheets}", flush=True)
+        # DEBUG: return raw data to understand current structure
+        debug = {}
+        for s in all_sheets:
+            result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{s}!1:20").execute()
+            debug[s] = result.get("values", [])
+        return JSONResponse({"debug": True, "sheets": debug})
 
         # Map expected sheet names to actual names
         def find_sheet(name_hints):
@@ -1656,6 +1662,13 @@ async def api_sheets_finance(request: Request):
             return JSONResponse({"error": f"No sheets found. Available: {all_sheets}"}, status_code=500)
 
         sheets_api = service.spreadsheets().values()
+
+        # ⚠️ DEBUG: return raw data to see current sheet structure
+        debug = {}
+        for s in all_sheets:
+            result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{s}!1:20").execute()
+            debug[s] = result.get("values", [])
+        return JSONResponse({"debug": True, "sheets": debug})
 
         # ── Tablero de Control (row 18 = current month data) ──
         tablero = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A18:N18").execute()
