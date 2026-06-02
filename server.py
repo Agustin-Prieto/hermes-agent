@@ -1479,7 +1479,7 @@ async def api_sheets_finance(request: Request):
             current_year = int(m.group(2))
 
         # ── Bank dates from Tablero rows 10-13 ──
-        dates_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A10:E13").execute()
+        dates_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A10:E14").execute()
         dates_rows = dates_result.get("values", [])
         bancos_fechas = {}
         for row in dates_rows:
