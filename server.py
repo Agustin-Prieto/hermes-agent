@@ -1654,30 +1654,74 @@ async def api_sheets_finance(request: Request):
         if not tablero_name:
             return JSONResponse({"error": f"No sheets found. Available: {all_sheets}"}, status_code=500)
 
-        # DEBUG: return raw data to see current sheet structure
-        debug = {}
-        for s in all_sheets:
-            res = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{s}!1:25").execute()
-            debug[s] = res.get("values", [])
-        return JSONResponse({"debug": True, "sheets": debug})
+        # ── Read new Tablero structure ──
+        # Section 1: Resumen (rows 2-10) - data in col B
+        resumen = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A2:J10").execute()
+        r_rows = resumen.get("values", [])
 
-        # ── Tablero de Control (row 18 = current month data) ──
-        tablero = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A18:N18").execute()
-        t = tablero.get("values", [[]])[0]
-        # A=Mes, B=Ingreso, C=% Ahorro, D=Tope Gasto, E=Total Gastado
-        # F=% Uso, G=Semáforo, H=Exigible Galicia, I=Exigible Macro
-        # J=Exigible ICBC, K=Exigible ML, L=Total Exigible, M=Rescate FCI
-        ingreso = parse_ars(t[1]) if len(t) > 1 else 0
-        tope_gasto = parse_ars(t[3]) if len(t) > 3 else 0
-        total_gastado = parse_ars(t[4]) if len(t) > 4 else 0
-        pct_uso = parse_ars(t[5]) if len(t) > 5 else 0
-        semaforo = t[6] if len(t) > 6 else "🟢"
-        galicia = parse_ars(t[7]) if len(t) > 7 else 0
-        macro = parse_ars(t[8]) if len(t) > 8 else 0
-        icbc = parse_ars(t[9]) if len(t) > 9 else 0
-        ml = parse_ars(t[10]) if len(t) > 10 else 0
-        total_exigible = parse_ars(t[11]) if len(t) > 11 else 0
-        fci = parse_ars(t[12]) if len(t) > 12 else 0
+        def get_resumen(label):
+            for row in r_rows:
+                if row and label.lower() in row[0].lower():
+                    return parse_ars(row[1]) if len(row) > 1 else 0
+            return 0
+
+        ingreso = get_resumen("Ingreso Total")
+        tope_gasto = get_resumen("Tope de Gasto")
+        total_gastado = get_resumen("Total Gastado")
+        pct_uso = get_resumen("% Usado")
+        pct_ahorro = get_resumen("Ahorro Meta")
+
+        # Exigible por banco (col D-E, rows 4-8)
+        exigibles = {"Galicia": 0, "Macro": 0, "ICBC": 0, "MercadoLibre": 0, "Mercado Libre": 0}
+        galicia = macro = icbc = ml = total_exigible = fci = 0
+        for row in r_rows:
+            if len(row) >= 5 and row[3]:
+                name = row[3].strip()
+                monto = parse_ars(row[4])
+                if "galicia" in name.lower():
+                    galicia = monto
+                elif "macro" in name.lower():
+                    macro = monto
+                elif "icbc" in name.lower():
+                    icbc = monto
+                elif "mercado" in name.lower():
+                    ml = monto
+                elif "total" in name.lower():
+                    total_exigible = monto
+                elif "fci" in name.lower() or "rescate" in name.lower():
+                    fci = monto
+
+        # Section 2: Seguimiento Mensual (row 21)
+        seg_result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A21:N21").execute()
+        seg_rows = seg_result.get("values", [[]])[0]
+        semaforo = seg_rows[6] if len(seg_rows) > 6 else "🟢"
+        # Also get exigibles from seguimiento if not found in resumen
+        if galicia == 0 and len(seg_rows) > 7:
+            galicia = parse_ars(seg_rows[7])
+        if macro == 0 and len(seg_rows) > 8:
+            macro = parse_ars(seg_rows[8])
+        if icbc == 0 and len(seg_rows) > 9:
+            icbc = parse_ars(seg_rows[9])
+        if ml == 0 and len(seg_rows) > 10:
+            ml = parse_ars(seg_rows[10])
+        if total_exigible == 0 and len(seg_rows) > 11:
+            total_exigible = parse_ars(seg_rows[11])
+        if fci == 0 and len(seg_rows) > 12:
+            fci = parse_ars(seg_rows[12])
+
+        # Section 3: Bank dates (rows 14-17)
+        fechas = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{tablero_name}!A14:D17").execute()
+        f_rows = fechas.get("values", [])
+        bancos_fechas = {}
+        for row in f_rows:
+            if len(row) >= 3:
+                name = row[0].replace("Mercado Libre", "MercadoLibre")
+                bancos_fechas[name] = {
+                    "cierre": row[1] if len(row) > 1 else "",
+                    "vencimiento": row[2] if len(row) > 2 else "",
+                    "cierre_date": row[1] if len(row) > 1 else "",
+                    "vto_date": row[2] if len(row) > 2 else "",
+                }
 
         # ── Compute current month/year from tablero ──
         import datetime
