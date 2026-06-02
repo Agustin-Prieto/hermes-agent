@@ -1656,18 +1656,15 @@ async def api_sheets_finance(request: Request):
         registro_name = find_sheet(["registro", "gastos", "expenses", "registro"])
 
         sheets_api = service.spreadsheets().values()
-        registro_name = find_sheet(["registro", "gastos", "expenses", "registro"])
 
         if not tablero_name:
             return JSONResponse({"error": f"No sheets found. Available: {all_sheets}"}, status_code=500)
 
-        sheets_api = service.spreadsheets().values()
-
-        # ⚠️ DEBUG: return raw data to see current sheet structure
+        # DEBUG: return raw data to see current sheet structure
         debug = {}
         for s in all_sheets:
-            result = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{s}!1:20").execute()
-            debug[s] = result.get("values", [])
+            res = sheets_api.get(spreadsheetId=SHEET_ID, range=f"{s}!1:25").execute()
+            debug[s] = res.get("values", [])
         return JSONResponse({"debug": True, "sheets": debug})
 
         # ── Tablero de Control (row 18 = current month data) ──
